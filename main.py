@@ -258,7 +258,7 @@ run_clicked = st.button("▶  Avvia il Team di Agenti")
 # ------------------------------------------------------------------
 def call_gemini_api(system_prompt: str, user_message: str, api_key: str, max_retries: int = 3) -> str:
     """Chiama Gemini API con retry esponenziale."""
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     headers = {"Content-Type": "application/json"}
     
     payload = {
@@ -308,7 +308,7 @@ def extract_text_from_docx_file(file) -> str:
 
 def describe_image_with_gemini(api_key: str, image_bytes: bytes, mime_type: str) -> str:
     """Usa Gemini per descrivere un'immagine."""
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
     payload = {
         "contents": [{
             "parts": [
