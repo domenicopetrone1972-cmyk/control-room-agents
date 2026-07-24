@@ -8,17 +8,11 @@ import random
 import requests
 import streamlit as st
 from dotenv import load_dotenv
-from crewai import Agent, Crew, Process, Task, LLM
-
-load_dotenv()
-
 from docx import Document
 from docx.shared import Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-
 from pypdf import PdfReader
 from PIL import Image as PILImage
-
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
@@ -26,6 +20,8 @@ from reportlab.lib.colors import HexColor
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem, Image as RLImage,
 )
+
+load_dotenv()
 
 # ------------------------------------------------------------------
 # CONFIGURAZIONE PAGINA
@@ -147,54 +143,36 @@ div[data-testid="stAlert"] { border-radius: 8px; font-family: 'Inter', sans-seri
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------
-# DEFINIZIONE DEL TEAM DI AGENTI (istruzioni tarate per output sintetico)
+# DEFINIZIONE AGENTI (istruzioni per Gemini API)
 # ------------------------------------------------------------------
 AGENTS_CONFIG = [
     {
         "key": "researcher",
         "tag": "Agente 01",
         "role": "Ricercatore Senior",
-        "goal": "Raccogliere solo i dati più rilevanti sul task richiesto, in modo sintetico.",
-        "backstory": "Sei un analista esperto che va dritto al punto, senza divagazioni.",
         "desc": "Raccoglie i dati essenziali sul task.",
-        "task": (lambda task_input: f"Fai una ricerca sintetica su questo argomento: {task_input}. "
-                                     f"Individua solo i 3-4 dati o trend più rilevanti. Massimo 100 parole."),
-        "expected_output": "Elenco puntato con i 3-4 punti chiave più rilevanti (massimo 100 parole).",
+        "system_prompt": "Sei un analista esperto che va dritto al punto. Raccogli solo i 3-4 dati più rilevanti su questo argomento. Massimo 100 parole.",
     },
     {
         "key": "analyst",
         "tag": "Agente 02",
         "role": "Analista Critico",
-        "goal": "Individuare rapidamente i rischi e le opportunità più significativi.",
-        "backstory": "Sei un analista di mercato abituato a sintesi rapide per decisioni operative.",
         "desc": "Evidenzia i 2-3 rischi/opportunità più rilevanti.",
-        "task": (lambda task_input: "Analizza i dati raccolti dal ricercatore. Individua solo i 2-3 elementi più "
-                                     "critici tra rischi e opportunità. Massimo 80 parole, elenco puntato."),
-        "expected_output": "Elenco puntato con i 2-3 rischi/opportunità più rilevanti (massimo 80 parole).",
+        "system_prompt": "Sei un analista di mercato. Individua solo i 2-3 elementi più critici tra rischi e opportunità in base ai dati forniti. Massimo 80 parole.",
     },
     {
         "key": "writer",
         "tag": "Agente 03",
         "role": "Redattore di Report",
-        "goal": "Scrivere un report breve, diretto e professionale.",
-        "backstory": "Sei un copywriter che scrive per manager che hanno 30 secondi da dedicare alla lettura.",
         "desc": "Scrive un report breve in Markdown.",
-        "task": (lambda task_input: "Scrivi un report in italiano basato sui dati e sull'analisi. Massimo 200 "
-                                     "parole totali. Markdown con 2-3 titoli (##) ed elenchi puntati brevi. "
-                                     "Nessuna frase di riempimento."),
-        "expected_output": "Report in Markdown, massimo 200 parole, con 2-3 titoli ed elenchi puntati essenziali.",
+        "system_prompt": "Scrivi un report in italiano basato sui dati e sull'analisi. Massimo 200 parole totali. Markdown con 2-3 titoli (##) ed elenchi puntati brevi.",
     },
     {
         "key": "editor",
         "tag": "Agente 04",
         "role": "Editor & QA",
-        "goal": "Tagliare tutto il superfluo e restituire un report pronto per un cliente.",
-        "backstory": "Sei un editor spietato con le ripetizioni: se una frase non aggiunge valore, la elimini.",
         "desc": "Taglia il superfluo, output finale pronto.",
-        "task": (lambda task_input: "Rileggi il report e riducilo se necessario: non deve superare le 200 parole "
-                                     "totali. Elimina ripetizioni e dettagli superflui. Output pulito, in Markdown, "
-                                     "senza commenti fuori dal report."),
-        "expected_output": "Report finale conciso (massimo 200 parole), in Markdown pulito.",
+        "system_prompt": "Rileggi il report e riducilo se necessario: non deve superare le 200 parole totali. Elimina ripetizioni e dettagli superflui. Output pulito, in Markdown, senza commenti.",
     },
 ]
 
@@ -207,7 +185,7 @@ st.markdown(
         <div class="dot"></div>
         <div>
             <h1>CONTROL ROOM</h1>
-            <div class="subtitle">MULTI-AGENT ORCHESTRATION · LOCAL WORKSPACE</div>
+            <div class="subtitle">MULTI-AGENT ORCHESTRATION · STREAMLIT CLOUD</div>
         </div>
     </div>
     """,
@@ -224,16 +202,8 @@ api_key = st.sidebar.text_input(
     type="password",
     value=default_api_key,
     placeholder="Incolla qui la tua chiave",
-    help="Caricata automaticamente dal file .env. Puoi sovrascriverla qui se serve.",
+    help="Caricata automaticamente da Streamlit Secrets. Puoi sovrascriverla qui se serve.",
 )
-
-MODEL_OPTIONS = {
-    "Gemini 3.5 Flash (consigliato)": "gemini/gemini-3.5-flash",
-    "Gemini 3.5 Flash-Lite (più economico)": "gemini/gemini-3.5-flash-lite",
-    "Gemini 2.5 Flash (alternativa stabile)": "gemini/gemini-2.5-flash",
-}
-model_label = st.sidebar.selectbox("Modello Gemini", list(MODEL_OPTIONS.keys()))
-selected_model = MODEL_OPTIONS[model_label]
 
 generate_image = st.sidebar.checkbox("Genera immagine di copertina", value=True)
 
@@ -283,32 +253,42 @@ uploaded_files = st.file_uploader(
 
 run_clicked = st.button("▶  Avvia il Team di Agenti")
 
-
-def kickoff_with_retry(crew, max_retries=4):
-    """Esegue il crew con retry a backoff esponenziale in caso di errore 429 (quota superata)."""
+# ------------------------------------------------------------------
+# FUNZIONI HELPER
+# ------------------------------------------------------------------
+def call_gemini_api(system_prompt: str, user_message: str, api_key: str, max_retries: int = 3) -> str:
+    """Chiama Gemini API con retry esponenziale."""
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    headers = {"Content-Type": "application/json"}
+    
+    payload = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": f"{system_prompt}\n\n{user_message}"}
+                ]
+            }
+        ],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}
+    }
+    
     for attempt in range(max_retries):
         try:
-            return crew.kickoff()
+            resp = requests.post(f"{url}?key={api_key}", json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
             error_str = str(e)
-            is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower()
+            is_rate_limit = "429" in error_str or "quota" in error_str.lower()
             if is_rate_limit and attempt < max_retries - 1:
                 wait_time = (2 ** attempt) + random.uniform(0, 1)
-                st.warning(
-                    f"Quota API raggiunta (429). Riprovo tra {wait_time:.1f}s "
-                    f"(tentativo {attempt + 1}/{max_retries})..."
-                )
+                st.warning(f"Quota API raggiunta. Riprovo tra {wait_time:.1f}s...")
                 time.sleep(wait_time)
                 continue
             raise
-    raise RuntimeError("Numero massimo di tentativi raggiunto dopo errori 429 ripetuti.")
-
-
-# ------------------------------------------------------------------
-# LETTURA ALLEGATI
-# ------------------------------------------------------------------
-MAX_CHARS_PER_DOC = 4000
-
+    raise RuntimeError("Numero massimo di tentativi raggiunto.")
 
 def extract_text_from_txt(file) -> str:
     raw = file.read()
@@ -317,39 +297,35 @@ def extract_text_from_txt(file) -> str:
     except UnicodeDecodeError:
         return raw.decode("latin-1", errors="ignore")
 
-
 def extract_text_from_pdf(file) -> str:
     reader = PdfReader(file)
     text = "\n".join((page.extract_text() or "") for page in reader.pages)
     return text
 
-
 def extract_text_from_docx_file(file) -> str:
     document = Document(file)
     return "\n".join(p.text for p in document.paragraphs)
 
-
 def describe_image_with_gemini(api_key: str, image_bytes: bytes, mime_type: str) -> str:
-    """Usa Gemini (vision) per descrivere brevemente un'immagine allegata."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={api_key}"
+    """Usa Gemini per descrivere un'immagine."""
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
     payload = {
         "contents": [{
             "parts": [
-                {"text": "Descrivi in italiano, in massimo 2 frasi, il contenuto di questa immagine, "
-                          "evidenziando dettagli utili per un report di lavoro."},
+                {"text": "Descrivi in italiano, in massimo 2 frasi, il contenuto di questa immagine, evidenziando dettagli utili per un report di lavoro."},
                 {"inlineData": {"mimeType": mime_type, "data": base64.b64encode(image_bytes).decode("utf-8")}},
             ]
         }]
     }
-    resp = requests.post(url, json=payload, timeout=30)
+    resp = requests.post(f"{url}?key={api_key}", json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
     return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-
 def build_attachments_context(files, api_key: str) -> str:
-    """Estrae testo/descrizioni da tutti gli allegati e li unisce in un unico blocco di contesto."""
+    """Estrae testo/descrizioni da tutti gli allegati."""
     blocks = []
+    MAX_CHARS_PER_DOC = 4000
     for f in files:
         ext = f.name.lower().rsplit(".", 1)[-1]
         try:
@@ -370,13 +346,9 @@ def build_attachments_context(files, api_key: str) -> str:
             st.warning(f"Non sono riuscito a leggere l'allegato '{f.name}': {e}")
     return "\n\n".join(blocks)
 
-
-# ------------------------------------------------------------------
-# GENERAZIONE IMMAGINE DI COPERTINA
-# ------------------------------------------------------------------
 def generate_cover_image(api_key: str, topic: str) -> bytes | None:
-    """Genera un'immagine di copertina a tema con Gemini (Nano Banana)."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
+    """Genera immagine di copertina con Gemini."""
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent"
     prompt = (
         f"Immagine editoriale professionale, stile minimal e pulito, senza testo scritto, "
         f"colori sobri, adatta come copertina di un report aziendale. Tema: {topic}"
@@ -385,19 +357,18 @@ def generate_cover_image(api_key: str, topic: str) -> bytes | None:
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]},
     }
-    resp = requests.post(url, json=payload, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-    for part in data["candidates"][0]["content"]["parts"]:
-        inline = part.get("inlineData") or part.get("inline_data")
-        if inline and inline.get("data"):
-            return base64.b64decode(inline["data"])
+    try:
+        resp = requests.post(f"{url}?key={api_key}", json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        for part in data["candidates"][0]["content"]["parts"]:
+            inline = part.get("inlineData") or part.get("inline_data")
+            if inline and inline.get("data"):
+                return base64.b64decode(inline["data"])
+    except Exception:
+        pass
     return None
 
-
-# ------------------------------------------------------------------
-# EXPORT: Markdown (+ immagine) -> DOCX / PDF professionali
-# ------------------------------------------------------------------
 def _split_bold(text):
     parts = re.split(r"(\*\*.*?\*\*)", text)
     segments = []
@@ -408,17 +379,13 @@ def _split_bold(text):
             segments.append((part, False))
     return segments
 
-
 def markdown_to_docx_bytes(md_text: str, title: str, image_bytes: bytes | None = None) -> bytes:
     doc = Document()
-
     heading = doc.add_heading(title, level=0)
     heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
     if image_bytes:
         doc.add_picture(io.BytesIO(image_bytes), width=Inches(6))
         doc.add_paragraph("")
-
     for raw_line in md_text.split("\n"):
         line = raw_line.rstrip()
         if not line.strip():
@@ -440,11 +407,9 @@ def markdown_to_docx_bytes(md_text: str, title: str, image_bytes: bytes | None =
             for text, bold in _split_bold(line):
                 run = p.add_run(text)
                 run.bold = bold
-
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
-
 
 def markdown_to_pdf_bytes(md_text: str, title: str, image_bytes: bytes | None = None) -> bytes:
     buf = io.BytesIO()
@@ -454,7 +419,6 @@ def markdown_to_pdf_bytes(md_text: str, title: str, image_bytes: bytes | None = 
         leftMargin=left_margin, rightMargin=right_margin, topMargin=top_margin, bottomMargin=bottom_margin,
     )
     avail_width = A4[0] - left_margin - right_margin
-
     styles = getSampleStyleSheet()
     accent = HexColor("#B96B22")
     title_style = ParagraphStyle("TitleCustom", parent=styles["Title"], textColor=accent, spaceAfter=18)
@@ -467,7 +431,6 @@ def markdown_to_pdf_bytes(md_text: str, title: str, image_bytes: bytes | None = 
         return re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
 
     elements = [Paragraph(title, title_style)]
-
     if image_bytes:
         try:
             img = PILImage.open(io.BytesIO(image_bytes))
@@ -517,7 +480,6 @@ def markdown_to_pdf_bytes(md_text: str, title: str, image_bytes: bytes | None = 
     doc.build(elements)
     return buf.getvalue()
 
-
 def render_markdown_preview(md_text: str):
     html = md_text
     html = re.sub(r"^### (.*)$", r"<h4>\1</h4>", html, flags=re.MULTILINE)
@@ -528,7 +490,6 @@ def render_markdown_preview(md_text: str):
     html = html.replace("\n", "<br>")
     st.markdown(f'<div class="result-panel">{html}</div>', unsafe_allow_html=True)
 
-
 # ------------------------------------------------------------------
 # ESECUZIONE
 # ------------------------------------------------------------------
@@ -538,7 +499,6 @@ if run_clicked:
     elif not task_input:
         st.warning("Per favore, inserisci un compito da assegnare agli agenti.")
     else:
-        # 0. Allegati -> contesto aggiuntivo
         combined_input = task_input
         if uploaded_files:
             with st.spinner("Leggo gli allegati..."):
@@ -548,43 +508,24 @@ if run_clicked:
 
         with st.spinner("Gli agenti sono al lavoro..."):
             try:
-                gemini_llm = LLM(model=selected_model, api_key=api_key)
+                results = []
+                
+                # Esecuzione sequenziale degli agenti
+                for i, cfg in enumerate(AGENTS_CONFIG):
+                    previous_context = "\n\n".join(results) if results else ""
+                    if previous_context:
+                        user_msg = f"Argomento: {combined_input}\n\nContesto dalle fasi precedenti:\n{previous_context}"
+                    else:
+                        user_msg = combined_input
+                    
+                    st.info(f"🤖 {cfg['role']} sta lavorando...")
+                    result = call_gemini_api(cfg["system_prompt"], user_msg, api_key)
+                    results.append(result)
+                    time.sleep(0.5)  # Evita rate limiting
 
-                # 1. Crea gli agenti dalla configurazione
-                agents = {}
-                for cfg in AGENTS_CONFIG:
-                    agents[cfg["key"]] = Agent(
-                        role=cfg["role"],
-                        goal=cfg["goal"],
-                        backstory=cfg["backstory"],
-                        verbose=True,
-                        llm=gemini_llm,
-                    )
+                report_text = results[-1]  # Output finale dell'Editor
 
-                # 2. Crea i task in sequenza, incatenando il contesto
-                tasks = []
-                for cfg in AGENTS_CONFIG:
-                    task = Task(
-                        description=cfg["task"](combined_input),
-                        expected_output=cfg["expected_output"],
-                        agent=agents[cfg["key"]],
-                        context=list(tasks) if tasks else None,
-                    )
-                    tasks.append(task)
-
-                # 3. Crew
-                my_crew = Crew(
-                    agents=list(agents.values()),
-                    tasks=tasks,
-                    process=Process.sequential,
-                    verbose=True,
-                )
-
-                # 4. Esecuzione con retry sui 429
-                result = kickoff_with_retry(my_crew)
-                report_text = result.raw if hasattr(result, "raw") else str(result)
-
-                # 5. Immagine di copertina (facoltativa, non blocca il flusso se fallisce)
+                # Immagine di copertina
                 cover_image_bytes = None
                 if generate_image:
                     try:
@@ -593,13 +534,13 @@ if run_clicked:
                     except Exception:
                         st.info("Non sono riuscito a generare l'immagine di copertina (facoltativa) — il report procede senza.")
 
-                # 6. Risultato a schermo
+                # Risultato a schermo
                 st.markdown('<div class="section-label" style="margin-top:24px;">Risultato</div>', unsafe_allow_html=True)
                 if cover_image_bytes:
                     st.image(cover_image_bytes, use_container_width=True)
                 render_markdown_preview(report_text)
 
-                # 7. Export
+                # Export
                 docx_bytes = markdown_to_docx_bytes(report_text, "Report — Control Room", cover_image_bytes)
                 pdf_bytes = markdown_to_pdf_bytes(report_text, "Report — Control Room", cover_image_bytes)
 
@@ -623,17 +564,10 @@ if run_clicked:
 
             except Exception as e:
                 error_str = str(e)
-                if "404" in error_str and "NOT_FOUND" in error_str:
-                    st.error(
-                        "Errore 404: il modello selezionato non è disponibile per la tua API key. "
-                        "Prova a cambiare modello dalla barra laterale."
-                    )
-                elif "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    st.error(
-                        "Errore 429: hai superato la quota della tua API key "
-                        "(troppe richieste in poco tempo). Aspetta qualche minuto, "
-                        "oppure passa a un modello più economico come Flash-Lite."
-                    )
+                if "404" in error_str or "NOT_FOUND" in error_str:
+                    st.error("Errore 404: il modello Gemini non è disponibile per la tua API key.")
+                elif "429" in error_str or "quota" in error_str.lower():
+                    st.error("Errore 429: hai superato la quota della tua API key. Aspetta qualche minuto.")
                 elif "API_KEY_INVALID" in error_str or "401" in error_str:
                     st.error("La API key non è valida. Controlla di averla copiata correttamente.")
                 else:
